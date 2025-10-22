@@ -7,7 +7,6 @@ import {
   StyleSheet,
   Dimensions,
 } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialIcons';
 import { Category } from '../types/Article';
 
 export interface NewsCategory {
@@ -89,12 +88,6 @@ const CategoryHeader: React.FC<CategoryHeaderProps> = ({
               onPress={() => handleCategoryPress(category.id, index)}
               activeOpacity={0.7}
             >
-              <Icon
-                name={category.icon}
-                size={22}
-                color={isActive ? '#FFFFFF' : category.color || '#666666'}
-                style={styles.categoryIcon}
-              />
               <Text
                 style={[
                   styles.categoryText,
@@ -154,9 +147,6 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.3)',
-  },
-  categoryIcon: {
-    marginRight: 7,
   },
   categoryText: {
     fontSize: 14,

@@ -220,7 +220,7 @@ export function getIndianSources(): NewsAPIConfig[] {
 // Configuration for NewsAPI.org (paid service)
 export const NEWSAPI_CONFIG = {
   baseUrl: 'https://newsapi.org/v2',
-  apiKey: process.env.NEWSAPI_KEY || 'your_api_key_here',
+  apiKey: 'your_api_key_here', // Replace with actual API key
   endpoints: {
     topHeadlines: '/top-headlines',
     everything: '/everything',

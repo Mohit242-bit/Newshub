@@ -10,12 +10,8 @@ import {
 import { Article, Category, ServiceResponse } from '../types/Article';
 import CategoryHeader from '../components/CategoryHeader';
 import NewsList from '../components/NewsList';
-import DebugPanel from '../components/DebugPanel';
-import DebugApiTest from '../components/DebugApiTest';
-import CategoryService from '../services/categoryService';
 import PreloadingService from '../services/preloadingService';
 import NetworkService from '../services/networkService';
-import { isInDemoMode, shouldLogVerbose } from '../config/developmentConfig';
 
 const HomeScreen: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<Category>(Category.ALL);
@@ -144,10 +140,6 @@ const HomeScreen: React.FC = () => {
         setNetworkStatus(isNetworkAvailable);
         console.log(`🌐 Network status: ${isNetworkAvailable ? 'Available' : 'Unavailable'}`);
         
-        // Log development mode status
-        if (shouldLogVerbose()) {
-          console.log(`🛠️ Development mode: ${isInDemoMode() ? 'Demo Priority' : 'Network Priority'}`);
-        }
         
         // Start background pre-loading of other categories
         console.log('🔄 Starting background pre-loading...');
@@ -193,20 +185,18 @@ const HomeScreen: React.FC = () => {
       <View style={styles.header}>
         <View style={styles.titleContainer}>
           <Text style={styles.appTitle}>NewsHub</Text>
-          {(!networkStatus || isInDemoMode()) && (
-            <View style={[styles.networkIndicator, isInDemoMode() && styles.devModeIndicator]}>
+          {!networkStatus && (
+            <View style={styles.networkIndicator}>
               <Text style={styles.networkText}>
-                {isInDemoMode() ? '🛠️ Dev Mode' : '📵 Offline'}
+                📵 Offline
               </Text>
             </View>
           )}
         </View>
         <Text style={styles.subtitle}>
-          {isInDemoMode() 
-            ? 'Development mode - Showing demo content for faster testing' 
-            : networkStatus 
-              ? 'Stay informed with the latest updates' 
-              : 'Showing demo content - Check internet connection'
+          {networkStatus 
+            ? 'Stay informed with the latest updates' 
+            : 'Offline mode - Showing cached content'
           }
         </Text>
       </View>
@@ -244,9 +234,6 @@ const HomeScreen: React.FC = () => {
           </Text>
         </View>
       )}
-      
-      <DebugApiTest />
-      <DebugPanel />
     </SafeAreaView>
   );
 };
@@ -288,9 +275,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
-  },
-  devModeIndicator: {
-    backgroundColor: '#4CAF50',
   },
   networkText: {
     color: '#fff',

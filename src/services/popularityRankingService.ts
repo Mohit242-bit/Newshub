@@ -17,7 +17,7 @@ class PopularityRankingService {
   private static instance: PopularityRankingService;
   
   // Popular keywords by category for trending detection
-  private trendingKeywords = {
+  private trendingKeywords: { [key in Category]?: string[] } = {
     [Category.INDIA]: ['breaking', 'parliament', 'election', 'modi', 'congress', 'bjp', 'supreme court', 'bollywood', 'cricket', 'startup'],
     [Category.TECH]: ['ai', 'artificial intelligence', 'smartphone', 'apple', 'google', 'microsoft', 'meta', 'tesla', 'breakthrough', 'innovation'],
     [Category.SOFTWARE]: ['react', 'javascript', 'python', 'github', 'release', 'update', 'security', 'bug', 'feature', 'developer'],
@@ -112,7 +112,7 @@ class PopularityRankingService {
     const title = article.title.toLowerCase();
     const description = article.description?.toLowerCase() || '';
     
-    const matchCount = keywords.filter(keyword => 
+    const matchCount = keywords.filter((keyword: string) =>
       title.includes(keyword) || description.includes(keyword)
     ).length;
     

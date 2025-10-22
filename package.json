@@ -1,6 +1,24 @@
 {
-  "name": "NewsHub",
-  "version": "0.0.1",
+  "name": "newshub",
+  "displayName": "NewsHub",
+  "version": "1.0.0",
+  "description": "Smart news aggregator with AI-powered popularity ranking",
+  "author": "Your Name <your.email@example.com>",
+  "homepage": "https://github.com/yourusername/NewsHub",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/NewsHub.git"
+  },
+  "keywords": [
+    "react-native",
+    "news",
+    "aggregator",
+    "india",
+    "tech",
+    "ai",
+    "popularity-ranking"
+  ],
+  "license": "MIT",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
