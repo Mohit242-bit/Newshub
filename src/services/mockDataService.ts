@@ -10,7 +10,7 @@ class MockDataService {
     return MockDataService.instance;
   }
 
-  getMockArticles(category: Category, limit: number = 20): ServiceResponse<Article[]> {
+  getMockArticles(category: Category, limit: number = 30): ServiceResponse<Article[]> {
     const baseArticles = [
       // Breaking India News
       {
@@ -230,6 +230,67 @@ class MockDataService {
         publishedAt: new Date(Date.now() - 14400000).toISOString(), // 4 hours ago
         category: Category.AI_ML,
         tags: ['chatgpt', 'openai', 'ai-model', 'performance']
+      },
+      // Additional Indian News for Better Coverage
+      {
+        id: 'mock_india_5',
+        title: 'Breaking: India GDP Growth Exceeds Expectations at 7.2%',
+        description: 'India\'s economy shows robust growth in Q3, driven by manufacturing and services sectors, outpacing global economic forecasts.',
+        url: 'https://economictimes.indiatimes.com/',
+        urlToImage: 'https://picsum.photos/400/300?random=8',
+        author: 'Economic Editor',
+        source: 'Economic Times',
+        publishedAt: new Date(Date.now() - 2700000).toISOString(), // 45 mins ago
+        category: Category.INDIA,
+        tags: ['gdp', 'economy', 'growth', 'breaking']
+      },
+      {
+        id: 'mock_india_6',
+        title: 'Major: PM Modi Launches National Health Mission 2.0',
+        description: 'Prime Minister announces ambitious healthcare reforms targeting rural areas, with ₹2 lakh crore investment over 5 years.',
+        url: 'https://www.pmindia.gov.in/',
+        urlToImage: 'https://picsum.photos/400/300?random=9',
+        author: 'Health Correspondent',
+        source: 'PIB India',
+        publishedAt: new Date(Date.now() - 4500000).toISOString(), // 1.25 hours ago
+        category: Category.INDIA,
+        tags: ['healthcare', 'policy', 'modi', 'rural-development']
+      },
+      {
+        id: 'mock_india_7',
+        title: 'Exclusive: Indian Railways Unveils High-Speed Bullet Train Timeline',
+        description: 'Mumbai-Ahmedabad bullet train project accelerates with Japanese technology, expected completion by 2028.',
+        url: 'https://indianrailways.gov.in/',
+        urlToImage: 'https://picsum.photos/400/300?random=10',
+        author: 'Transport Reporter',
+        source: 'Railway News',
+        publishedAt: new Date(Date.now() - 9000000).toISOString(), // 2.5 hours ago
+        category: Category.INDIA,
+        tags: ['railways', 'bullet-train', 'infrastructure', 'exclusive']
+      },
+      {
+        id: 'mock_india_8',
+        title: 'Breaking: Chandrayaan-3 Successfully Lands on Moon\'s South Pole',
+        description: 'ISRO achieves historic milestone as India becomes fourth country to land on moon, first to reach lunar south pole.',
+        url: 'https://www.isro.gov.in/',
+        urlToImage: 'https://picsum.photos/400/300?random=11',
+        author: 'Space Editor',
+        source: 'ISRO Official',
+        publishedAt: new Date(Date.now() - 12600000).toISOString(), // 3.5 hours ago
+        category: Category.INDIA,
+        tags: ['chandrayaan', 'moon-landing', 'isro', 'breaking', 'space']
+      },
+      {
+        id: 'mock_india_9',
+        title: 'Major: India-UK FTA Talks Enter Final Phase',
+        description: 'Trade negotiations between India and UK reach conclusive stage, expected to boost bilateral trade by $100 billion.',
+        url: 'https://www.thehindu.com/',
+        urlToImage: 'https://picsum.photos/400/300?random=12',
+        author: 'Trade Correspondent',
+        source: 'The Hindu',
+        publishedAt: new Date(Date.now() - 16200000).toISOString(), // 4.5 hours ago
+        category: Category.INDIA,
+        tags: ['trade', 'uk', 'fta', 'bilateral', 'economy']
       }
     ];
 
@@ -241,10 +302,10 @@ class MockDataService {
 
     // If no articles for specific category, provide some generic ones
     if (filteredArticles.length === 0) {
-      filteredArticles = baseArticles.slice(0, 3).map(article => ({
+      filteredArticles = baseArticles.slice(0, 3).map((article, index) => ({
         ...article,
         category,
-        id: `mock_${category}_${article.id}`,
+        id: `mock_${category}_${article.id}_${index}_${Date.now()}`,
         title: `${this.getCategoryName(category)}: ${article.title}`
       }));
     }

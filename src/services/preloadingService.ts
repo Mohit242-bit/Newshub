@@ -66,7 +66,7 @@ class PreloadingService {
     try {
       console.log(`📱 Pre-loading ${category}...`);
       
-      const response = await this.networkService.getArticles(category, 15);
+      const response = await this.networkService.getArticles(category, 25);
       
       if (response.data.length > 0) {
         // Rank articles by popularity before caching
@@ -108,7 +108,7 @@ class PreloadingService {
     console.log(`🔄 Loading fresh data for: ${category}`);
     
     try {
-      const response = await this.networkService.getArticles(category, 20);
+      const response = await this.networkService.getArticles(category, 30);
       
       // Cache the fresh data with popularity ranking
       if (response.data.length > 0) {
@@ -152,7 +152,7 @@ class PreloadingService {
     this.preloadedCache.delete(category);
     
     console.log(`🔄 Force refreshing: ${category}`);
-    return this.networkService.refreshArticles(category, 20);
+    return this.networkService.refreshArticles(category, 30);
   }
 
   /**

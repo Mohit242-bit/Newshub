@@ -216,6 +216,15 @@ const HomeScreen: React.FC = () => {
         onCategoryChange={handleCategoryChange}
       />
       
+      {articles.length > 0 && (
+        <View style={styles.articleCount}>
+          <Text style={styles.articleCountText}>
+            📰 {articles.length} articles loaded from {currentSource}
+            {hasMore && ' • Pull up for more'}
+          </Text>
+        </View>
+      )}
+      
       <NewsList
         articles={articles}
         loading={loading}
@@ -306,6 +315,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#856404',
     textAlign: 'center',
+  },
+  articleCount: {
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e9ecef',
+  },
+  articleCountText: {
+    fontSize: 12,
+    color: '#6c757d',
+    textAlign: 'center',
+    fontWeight: '500',
   },
 });
 

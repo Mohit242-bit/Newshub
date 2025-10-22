@@ -113,7 +113,7 @@ const NewsList: React.FC<NewsListProps> = ({
         {article.tags && article.tags.length > 0 && (
           <View style={styles.tagsContainer}>
             {article.tags.slice(0, 3).map((tag, index) => (
-              <View key={index} style={styles.tag}>
+              <View key={`${article.id}_tag_${index}_${tag}`} style={styles.tag}>
                 <Text style={styles.tagText}>{tag}</Text>
               </View>
             ))}
@@ -148,6 +148,7 @@ const NewsList: React.FC<NewsListProps> = ({
       {source && (
         <Text style={styles.sourceText}>Source: {source}</Text>
       )}
+      <Text style={styles.infoText}>Pull down to refresh or try another category</Text>
     </View>
   );
 
@@ -172,7 +173,10 @@ const NewsList: React.FC<NewsListProps> = ({
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
       }
       onEndReached={hasMore && onLoadMore ? onLoadMore : undefined}
-      onEndReachedThreshold={0.1}
+      onEndReachedThreshold={0.3}
+      initialNumToRender={10}
+      maxToRenderPerBatch={10}
+      windowSize={21}
       ListFooterComponent={renderFooter}
       ListEmptyComponent={renderEmpty}
       showsVerticalScrollIndicator={false}
@@ -202,6 +206,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#999',
     fontStyle: 'italic',
+  },
+  infoText: {
+    marginTop: 10,
+    fontSize: 13,
+    color: '#888',
+    textAlign: 'center',
+    fontWeight: '500',
   },
   emptyContainer: {
     flex: 1,
