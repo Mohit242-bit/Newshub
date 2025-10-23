@@ -1,14 +1,40 @@
 import { Category, ServiceResponse, Article } from '../types/Article';
-import CategoryService from './categoryService';
+import NewsApiService from './newsApiService';
+import HackerNewsService from './hackerNewsService';
 import MockDataService from './mockDataService';
-import { isInDemoMode, shouldBypassNetwork, getNetworkTimeout, shouldLogVerbose } from '../config/developmentConfig';
+import DevToService from './devToService';
+import GuardianService from './guardianService';
+import ESPNService from './espnService';
+import IndianNewsService from './indianNewsService';
 
 class NetworkService {
   private static instance: NetworkService;
-  private categoryService = CategoryService.getInstance();
+  private newsApiService = NewsApiService.getInstance();
+  private hackerNewsService = HackerNewsService.getInstance();
+  private devToService = DevToService.getInstance();
+  private guardianService = GuardianService.getInstance();
+  private espnService = ESPNService.getInstance();
+  private indianNewsService = IndianNewsService.getInstance();
   private mockDataService = MockDataService.getInstance();
   private isNetworkAvailable: boolean = true;
-  private networkCheckInterval: NodeJS.Timeout | null = null;
+  
+  // Category to primary service mapping
+  private categoryServiceMap: { [key in Category]?: string[] } = {
+    [Category.SOFTWARE]: ['devto', 'hackernews', 'newsapi'],
+    [Category.WEB_DEV]: ['devto', 'newsapi', 'hackernews'],
+    [Category.MOBILE_DEV]: ['devto', 'newsapi'],
+    [Category.TECH]: ['hackernews', 'guardian', 'newsapi'],
+    [Category.AI_ML]: ['hackernews', 'newsapi', 'devto'],
+    [Category.INDIA]: ['indiannews', 'guardian', 'newsapi'],
+    [Category.POLITICAL]: ['indiannews', 'guardian', 'newsapi'],
+    [Category.SPORTS]: ['espn', 'guardian', 'newsapi'],
+    [Category.BUSINESS]: ['guardian', 'newsapi'],
+    [Category.WORLD]: ['guardian', 'newsapi'],
+    [Category.BREAKING]: ['guardian', 'newsapi', 'hackernews'],
+    [Category.SCIENCE]: ['guardian', 'newsapi'],
+    [Category.STARTUPS]: ['newsapi', 'devto', 'hackernews'],
+    [Category.ALL]: ['newsapi', 'hackernews', 'guardian'],
+  };
 
   static getInstance(): NetworkService {
     if (!NetworkService.instance) {
@@ -18,85 +44,114 @@ class NetworkService {
   }
 
   constructor() {
-    this.startNetworkMonitoring();
+    // Network availability will be checked lazily when needed
+    console.log('📡 NetworkService initialized');
+  }
+
+  private checkNetworkStatus(): void {
+    // Check network status once, asynchronously
+    // Do NOT use setInterval to avoid continuous background tasks
+    if (!this.isNetworkAvailable) {
+      // Only check if we think network is down
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        
+        fetch('https://newsapi.org/v2', { method: 'HEAD', signal: controller.signal })
+          .then(() => {
+            clearTimeout(timeoutId);
+            this.isNetworkAvailable = true;
+            console.log('✅ Network became available');
+          })
+          .catch((err: any) => {
+            clearTimeout(timeoutId);
+            console.warn('⚠️ Network check failed:', err?.message);
+            // Keep current status, don't update
+          });
+      } catch (err) {
+        console.warn('⚠️ Network check exception:', err);
+      }
+    }
   }
 
   /**
-   * Get articles with smart demo/network prioritization for development
+   * Get articles using category-specific service routing
+   */
+  private async tryService(serviceName: string, category: Category, limit: number): Promise<ServiceResponse<Article[]> | null> {
+    try {
+      switch (serviceName) {
+        case 'devto':
+          return await this.devToService.getArticles(category, limit);
+        case 'guardian':
+          return await this.guardianService.getArticles(category, limit);
+        case 'espn':
+          return await this.espnService.getArticles(category, limit);
+        case 'indiannews':
+          return await this.indianNewsService.getArticles(category, limit);
+        case 'hackernews':
+          return await this.hackerNewsService.getArticles(category, limit);
+        case 'newsapi':
+          return await this.newsApiService.getArticles(category, limit);
+        default:
+          return null;
+      }
+    } catch (error) {
+      console.warn(`⚠️ Service ${serviceName} failed:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get articles - tries category-specific services with fallback chain
    */
   async getArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    if (shouldLogVerbose()) {
-      console.log(`🎯 Fetching ${category} articles (demoMode: ${isInDemoMode()}, bypassNetwork: ${shouldBypassNetwork()})`);
-    }
-    
-    // In development, prioritize demo data for faster loading
-    if (isInDemoMode()) {
-      try {
-        if (shouldLogVerbose()) {
-          console.log(`🚀 Demo mode: Loading ${category} articles instantly`);
-        }
-        
-        const mockResult = await this.mockDataService.getMockArticlesAsync(category, limit);
-        
-        // Add a small delay to simulate realistic loading
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        return {
-          ...mockResult,
-          source: `${mockResult.source} (Development Mode)`
-        };
-      } catch (error) {
-        if (shouldLogVerbose()) {
-          console.warn('Demo data failed, trying network:', error);
-        }
-      }
-    }
-    
-    // Skip network entirely if in demo-only mode
-    if (shouldBypassNetwork()) {
-      const mockResult = await this.mockDataService.getMockArticlesAsync(category, limit);
-      return {
-        ...mockResult,
-        source: `${mockResult.source} (Demo Only Mode)`
-      };
-    }
+    console.log(`🎯 Fetching ${category} articles (network: ${this.isNetworkAvailable ? 'available' : 'unavailable'})`);
     
     try {
-      if (shouldLogVerbose()) {
-        console.log(`🌐 Attempting network fetch for ${category} (timeout: ${getNetworkTimeout()}ms)`);
+      if (!this.isNetworkAvailable) {
+        console.warn(`⚠️ Network unavailable, falling back to mock data for ${category}`);
+        return await this.mockDataService.getMockArticlesAsync(category, limit);
       }
-      
-      // Try real data with development-friendly timeout
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Network timeout')), getNetworkTimeout());
-      });
 
-      const dataPromise = this.categoryService.getArticles(category, limit);
-      const result = await Promise.race([dataPromise, timeoutPromise]);
-      
-      if (result.data && result.data.length > 0) {
-        this.isNetworkAvailable = true;
-        if (shouldLogVerbose()) {
-          console.log(`✅ Network success: ${result.data.length} articles`);
+      // Get the service chain for this category
+      const serviceChain = this.categoryServiceMap[category] || ['newsapi', 'hackernews'];
+      console.log(`📡 Trying services in order: ${serviceChain.join(' → ')} for ${category}`);
+
+      // Try each service in the chain
+      for (const serviceName of serviceChain) {
+        console.log(`   ↳ Attempting ${serviceName}...`);
+        const result = await this.tryService(serviceName, category, limit);
+        
+        if (result && result.data.length > 0) {
+          console.log(`✅ Got ${result.data.length} articles from ${serviceName} for ${category}`);
+          return result;
         }
-        return result;
       }
-      
-      throw new Error('Empty network response');
-      
-    } catch (error) {
-      if (shouldLogVerbose()) {
-        console.warn(`❌ Network failed for ${category}, using demo:`, error.message);
-      }
-      
-      this.isNetworkAvailable = false;
-      
-      // Final fallback to mock data
+
+      // All primary services failed, try mock data
+      console.log(`📦 All services exhausted, falling back to mock data for ${category}`);
       const mockResult = await this.mockDataService.getMockArticlesAsync(category, limit);
-      return {
-        ...mockResult,
-        source: `${mockResult.source} (Network Failed - Demo Fallback)`
-      };
+      return mockResult;
+    } catch (error) {
+      console.error(`❌ Error fetching ${category} articles:`, error);
+      
+      // Last resort: try mock data
+      try {
+        const mockResult = await this.mockDataService.getMockArticlesAsync(category, limit);
+        return {
+          ...mockResult,
+          source: `${mockResult.source} (Error fallback)`
+        };
+      } catch (mockError) {
+        // If even mock fails, return empty
+        return {
+          data: [],
+          source: 'Error - No articles available',
+          timestamp: Date.now(),
+          hasMore: false,
+          totalResults: 0
+        };
+      }
     }
   }
 
@@ -108,92 +163,26 @@ class NetworkService {
   }
 
   /**
-   * Force refresh network status
-   */
-  async checkNetworkStatus(): Promise<boolean> {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-      // Try a simple HTTP request to test connectivity
-      const response = await fetch('https://httpbin.org/status/200', {
-        method: 'HEAD',
-        signal: controller.signal,
-        cache: 'no-cache'
-      });
-
-      clearTimeout(timeoutId);
-      this.isNetworkAvailable = response.ok;
-      
-      console.log(`🌐 Network status check: ${this.isNetworkAvailable ? 'Available' : 'Unavailable'}`);
-      return this.isNetworkAvailable;
-      
-    } catch (error) {
-      this.isNetworkAvailable = false;
-      console.log(`🌐 Network status check: Unavailable (${error.message})`);
-      return false;
-    }
-  }
-
-  /**
-   * Start monitoring network status
-   */
-  private startNetworkMonitoring(): void {
-    // Check network status every 30 seconds
-    this.networkCheckInterval = setInterval(() => {
-      this.checkNetworkStatus();
-    }, 30000);
-
-    // Initial check
-    this.checkNetworkStatus();
-  }
-
-  /**
-   * Stop network monitoring
-   */
-  stopNetworkMonitoring(): void {
-    if (this.networkCheckInterval) {
-      clearInterval(this.networkCheckInterval);
-      this.networkCheckInterval = null;
-    }
-  }
-
-  /**
-   * Manual refresh - try network first, fallback to mock
+   * Manual refresh - clears cache and fetches fresh data using service routing
    */
   async refreshArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    console.log(`🔄 Manual refresh requested for ${category}`);
+    console.log(`🔄 Refreshing ${category}...`);
     
-    // Force network status check
-    await this.checkNetworkStatus();
-    
-    if (this.isNetworkAvailable) {
-      try {
-        const result = await this.categoryService.getArticles(category, limit);
-        
-        if (result.data && result.data.length > 0) {
-          console.log(`✅ Refresh successful: ${result.data.length} articles`);
-          return result;
-        }
-      } catch (error) {
-        console.warn('Refresh failed, using mock data:', error);
-      }
+    try {
+      // Clear caches for fresh data
+      this.devToService.clearCache();
+      this.guardianService.clearCache();
+      this.espnService.clearCache();
+      this.indianNewsService.clearCache();
+      this.hackerNewsService.clearCache();
+      this.newsApiService.clearCache();
+      
+      // Fetch fresh data using the same service chain
+      return await this.getArticles(category, limit);
+    } catch (error) {
+      console.error('Failed to refresh articles:', error);
+      return this.getArticles(category, limit);
     }
-
-    // If network is unavailable or failed, use mock data
-    const mockResult = await this.mockDataService.getMockArticlesAsync(category, limit);
-    return {
-      ...mockResult,
-      source: `${mockResult.source} (Refreshed - Network Unavailable)`
-    };
-  }
-
-  /**
-   * Get demo data directly (for testing)
-   */
-  async getDemoArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    console.log(`📱 Providing demo data for ${category}`);
-    return await this.mockDataService.getMockArticlesAsync(category, limit);
   }
 }
 

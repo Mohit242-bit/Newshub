@@ -1,264 +1,167 @@
 import { Article, Category, ServiceResponse } from '../types/Article';
-import ErrorHandler from './errorHandler';
-import { ArticleQualityFilter } from '../utils/articleQualityFilter';
 
-export interface HackerNewsItem {
+interface HNItem {
   id: number;
-  title?: string;
-  url?: string;
+  title: string;
+  url: string;
+  by: string;
+  time: number;
+  score: number;
+  descendants: number;
   text?: string;
-  by?: string;
-  time?: number;
-  score?: number;
-  descendants?: number;
-  type: 'story' | 'comment' | 'ask' | 'show' | 'job' | 'poll';
 }
 
 class HackerNewsService {
   private static instance: HackerNewsService;
-  private baseUrl = 'https://hacker-news.firebaseio.com/v0';
-  private errorHandler = ErrorHandler.getInstance();
+  private readonly BASE_URL = 'https://hacker-news.firebaseio.com/v0';
+  private readonly CACHE: Map<string, { data: Article[]; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
-  public static getInstance(): HackerNewsService {
+  static getInstance(): HackerNewsService {
     if (!HackerNewsService.instance) {
       HackerNewsService.instance = new HackerNewsService();
     }
     return HackerNewsService.instance;
   }
 
-  async fetchTopStories(limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `hn_top_${limit}`;
+  private mapHNItemToArticle(item: HNItem, category: Category): Article {
+    const publishedAt = new Date(item.time * 1000).toISOString();
+    const estimatedReadTime = Math.max(Math.ceil((item.title.length + (item.text?.length || 0)) / 200), 1);
     
-    const primaryCall = async (): Promise<ServiceResponse<Article[]>> => {
-      // Get top story IDs
-      const storiesResponse = await fetch(`${this.baseUrl}/topstories.json`);
-      if (!storiesResponse.ok) {
-        throw new Error(`HN topstories error: ${storiesResponse.status}`);
-      }
-      
-      const storyIds: number[] = await storiesResponse.json();
-      const limitedIds = storyIds.slice(0, limit);
-      
-      // Fetch story details in parallel (but limit concurrent requests)
-      const batchSize = 10;
-      const articles: Article[] = [];
-      
-      for (let i = 0; i < limitedIds.length; i += batchSize) {
-        const batch = limitedIds.slice(i, i + batchSize);
-        const batchPromises = batch.map(id => this.fetchStoryDetails(id));
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        batchResults.forEach(result => {
-          if (result.status === 'fulfilled' && result.value) {
-            articles.push(result.value);
-          }
-        });
-      }
-      
-      // Apply quality filter to HackerNews articles
-      const filteredArticles = ArticleQualityFilter.filterArticles(articles);
-      
-      return {
-        data: filteredArticles,
-        source: 'Hacker News',
-        timestamp: Date.now(),
-        hasMore: storyIds.length > limit,
-        totalResults: articles.length
-      };
-    };
-
-    const fallbackCall = async (): Promise<ServiceResponse<Article[]>> => {
-      // Fallback to new stories if top stories fail
-      const storiesResponse = await fetch(`${this.baseUrl}/newstories.json`);
-      if (!storiesResponse.ok) {
-        throw new Error(`HN newstories error: ${storiesResponse.status}`);
-      }
-      
-      const storyIds: number[] = await storiesResponse.json();
-      const limitedIds = storyIds.slice(0, limit);
-      
-      const articles: Article[] = [];
-      const batchSize = 10;
-      
-      for (let i = 0; i < limitedIds.length; i += batchSize) {
-        const batch = limitedIds.slice(i, i + batchSize);
-        const batchPromises = batch.map(id => this.fetchStoryDetails(id));
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        batchResults.forEach(result => {
-          if (result.status === 'fulfilled' && result.value) {
-            articles.push(result.value);
-          }
-        });
-      }
-      
-      return {
-        data: articles,
-        source: 'Hacker News (New)',
-        timestamp: Date.now(),
-        hasMore: storyIds.length > limit,
-        totalResults: articles.length
-      };
-    };
-
-    return this.errorHandler.executeWithFallback(
-      primaryCall,
-      [fallbackCall],
-      cacheKey,
-      'HackerNews'
-    );
-  }
-
-  async fetchShowStories(limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `hn_show_${limit}`;
-    
-    const showCall = async (): Promise<ServiceResponse<Article[]>> => {
-      const storiesResponse = await fetch(`${this.baseUrl}/showstories.json`);
-      if (!storiesResponse.ok) {
-        throw new Error(`HN showstories error: ${storiesResponse.status}`);
-      }
-      
-      const storyIds: number[] = await storiesResponse.json();
-      const limitedIds = storyIds.slice(0, limit);
-      
-      const articles: Article[] = [];
-      const batchSize = 10;
-      
-      for (let i = 0; i < limitedIds.length; i += batchSize) {
-        const batch = limitedIds.slice(i, i + batchSize);
-        const batchPromises = batch.map(id => this.fetchStoryDetails(id));
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        batchResults.forEach(result => {
-          if (result.status === 'fulfilled' && result.value) {
-            articles.push(result.value);
-          }
-        });
-      }
-      
-      return {
-        data: articles,
-        source: 'Hacker News Show',
-        timestamp: Date.now(),
-        hasMore: storyIds.length > limit,
-        totalResults: articles.length
-      };
-    };
-
-    return this.errorHandler.executeWithFallback(
-      showCall,
-      [],
-      cacheKey,
-      'HackerNews Show'
-    );
-  }
-
-  private async fetchStoryDetails(id: number): Promise<Article | null> {
-    try {
-      const response = await fetch(`${this.baseUrl}/item/${id}.json`);
-      if (!response.ok) {
-        return null;
-      }
-      
-      const item: HackerNewsItem = await response.json();
-      
-      // Only process stories with titles
-      if (!item.title || item.type !== 'story') {
-        return null;
-      }
-      
-      return this.transformToArticle(item);
-    } catch (error) {
-      console.warn(`Failed to fetch HN story ${id}:`, error);
-      return null;
-    }
-  }
-
-  private transformToArticle(item: HackerNewsItem): Article {
-    const publishedAt = item.time ? new Date(item.time * 1000).toISOString() : new Date().toISOString();
-    
-    // Extract description from text or generate from title
-    let description = '';
-    if (item.text) {
-      // Remove HTML tags and truncate
-      description = item.text.replace(/<[^>]*>/g, '').slice(0, 200);
-    } else {
-      description = `Hacker News discussion: ${item.title}`;
-    }
-    
-    // Determine if it's a Show HN, Ask HN, or regular story
-    let category = Category.SOFTWARE;
-    const title = item.title || '';
-    if (title.startsWith('Show HN:')) {
-      description = `Show HN: ${description}`;
-    } else if (title.startsWith('Ask HN:')) {
-      description = `Ask HN: ${description}`;
-    }
-
     return {
-      id: `hn_${item.id}_${Date.now()}`,
-      title: title,
-      description,
+      id: `hn-${item.id}`,
+      title: item.title,
+      description: item.text || `HackerNews discussion with ${item.descendants || 0} comments`,
+      content: item.text,
       url: item.url || `https://news.ycombinator.com/item?id=${item.id}`,
-      author: item.by || 'Anonymous',
+      urlToImage: undefined, // HN doesn't provide images
+      author: item.by,
       source: 'Hacker News',
       publishedAt,
       category,
-      tags: this.extractTags(title)
+      readTime: estimatedReadTime,
     };
   }
 
-  private extractTags(title: string): string[] {
-    const tags: string[] = [];
-    const lowerTitle = title.toLowerCase();
-    
-    // Common tech terms that might be in HN titles
-    const techKeywords = [
-      'javascript', 'js', 'python', 'rust', 'go', 'golang', 'react', 'vue', 'angular',
-      'ai', 'ml', 'machine learning', 'startup', 'opensource', 'crypto', 'blockchain',
-      'security', 'privacy', 'database', 'web', 'mobile', 'ios', 'android', 'linux'
-    ];
-    
-    techKeywords.forEach(keyword => {
-      if (lowerTitle.includes(keyword)) {
-        tags.push(keyword);
-      }
-    });
-    
-    if (title.startsWith('Show HN:')) tags.push('show-hn');
-    if (title.startsWith('Ask HN:')) tags.push('ask-hn');
-    
-    return tags;
+  private getCategoryStories(category: Category): string {
+    // HN has limited categories, so we map our categories to their story types
+    switch (category) {
+      case Category.TECH:
+      case Category.SOFTWARE:
+      case Category.AI_ML:
+      case Category.ALL:
+        return 'topstories';
+      default:
+        return 'topstories';
+    }
   }
 
-  async searchStories(query: string, limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    // HN doesn't have built-in search, so we'll fetch top stories and filter
-    const cacheKey = `hn_search_${query}_${limit}`;
-    
-    const searchCall = async (): Promise<ServiceResponse<Article[]>> => {
-      const topStories = await this.fetchTopStories(100); // Get more to filter from
-      
-      const filteredArticles = topStories.data.filter(article =>
-        article.title.toLowerCase().includes(query.toLowerCase()) ||
-        article.description.toLowerCase().includes(query.toLowerCase()) ||
-        article.tags?.some(tag => tag.toLowerCase().includes(query.toLowerCase()))
-      ).slice(0, limit);
-      
+  async getArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
+    const cacheKey = `hn-${category}-${limit}`;
+    const cached = this.CACHE.get(cacheKey);
+
+    // Return cached data if valid
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      console.log(`✅ Returning cached HN articles for ${category}`);
       return {
-        data: filteredArticles,
-        source: 'Hacker News Search',
+        data: cached.data,
+        source: 'Hacker News (Cached)',
+        timestamp: cached.timestamp,
+        hasMore: cached.data.length >= limit,
+        totalResults: cached.data.length,
+      };
+    }
+
+    try {
+      console.log(`🔄 Fetching ${category} articles from Hacker News...`);
+      const storyType = this.getCategoryStories(category);
+
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+      try {
+        // Get list of story IDs
+        const response = await fetch(`${this.BASE_URL}/${storyType}.json`, {
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          console.error(`❌ HN API error: ${response.status}`);
+          return {
+            data: [],
+            source: `Hacker News (Error: ${response.status})`,
+            timestamp: Date.now(),
+            hasMore: false,
+            totalResults: 0,
+          };
+        }
+
+        const storyIds: number[] = await response.json();
+        console.log(`📊 Got ${storyIds.length} story IDs from HN`);
+
+        // Fetch details for first N stories (limited to avoid too many parallel requests)
+        const storiesToFetch = storyIds.slice(0, Math.min(limit * 1.5, 30)); // Fetch fewer for faster loading
+        const articles: Article[] = [];
+        
+        // Fetch stories sequentially to avoid overwhelming the API
+        for (const id of storiesToFetch) {
+          if (articles.length >= limit) break;
+          
+          try {
+            const itemController = new AbortController();
+            const itemTimeoutId = setTimeout(() => itemController.abort(), 5000);
+            
+            const itemResponse = await fetch(`${this.BASE_URL}/item/${id}.json`, {
+              signal: itemController.signal,
+            });
+            
+            clearTimeout(itemTimeoutId);
+            
+            if (itemResponse.ok) {
+              const item: HNItem = await itemResponse.json();
+              // Only return stories with titles and URLs (not Ask HN, etc.)
+              if (item.title && (item.url || item.text)) {
+                articles.push(this.mapHNItemToArticle(item, category));
+              }
+            }
+          } catch (error) {
+            console.warn(`⚠️ Failed to fetch HN story ${id}:`, error);
+          }
+        }
+
+        // Cache the results
+        this.CACHE.set(cacheKey, { data: articles, timestamp: Date.now() });
+
+        console.log(`✅ Fetched ${articles.length} articles for ${category} from Hacker News`);
+
+        return {
+          data: articles,
+          source: 'Hacker News',
+          timestamp: Date.now(),
+          hasMore: articles.length >= limit,
+          totalResults: storyIds.length,
+        };
+      } finally {
+        // Ensure timeout is cleared
+      }
+    } catch (error) {
+      console.error(`❌ Exception fetching from Hacker News:`, error);
+      return {
+        data: [],
+        source: 'Hacker News (Exception)',
         timestamp: Date.now(),
         hasMore: false,
-        totalResults: filteredArticles.length
+        totalResults: 0,
       };
-    };
+    }
+  }
 
-    return this.errorHandler.executeWithFallback(
-      searchCall,
-      [],
-      cacheKey,
-      'HackerNews Search'
-    );
+  clearCache(): void {
+    this.CACHE.clear();
+    console.log('🗑️ HackerNews cache cleared');
   }
 }
 

@@ -1,36 +1,45 @@
-import { Article, Category, ServiceResponse, FetchArticlesOptions } from '../types/Article';
-import ErrorHandler from './errorHandler';
-import { ArticleQualityFilter } from '../utils/articleQualityFilter';
-
-interface NewsAPIArticle {
-  source: {
-    id: string | null;
-    name: string;
-  };
-  author: string | null;
-  title: string;
-  description: string | null;
-  url: string;
-  urlToImage: string | null;
-  publishedAt: string;
-  content: string | null;
-}
+import { Article, Category, ServiceResponse } from '../types/Article';
+import API_CONFIG from '../config/apiConfig';
 
 interface NewsAPIResponse {
   status: string;
   totalResults: number;
-  articles: NewsAPIArticle[];
+  articles: Array<{
+    source: { id: string; name: string };
+    author: string | null;
+    title: string;
+    description: string | null;
+    url: string;
+    urlToImage: string | null;
+    publishedAt: string;
+    content: string | null;
+  }>;
 }
 
 class NewsApiService {
   private static instance: NewsApiService;
-  private errorHandler: ErrorHandler;
-  private baseUrl = 'https://newsapi.org/v2';
-  private apiKey = '74efa1095b4f4e66b201bc488ad62b01'; // Your NewsAPI key
+  // Multiple API keys to try (in case one is exhausted)
+  private apiKeys = [
+    API_CONFIG.NEWSAPI_KEY, // Primary key from config
+    'demo', // Demo key (limited but works)
+  ];
+  private currentKeyIndex = 0;
+  private readonly BASE_URL = 'https://newsapi.org/v2';
+  private readonly CACHE: Map<string, { data: Article[]; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
-  private constructor() {
-    this.errorHandler = ErrorHandler.getInstance();
-  }
+  // Map categories to NewsAPI query strings
+  private categoryQueries: { [key in Category]?: string } = {
+    [Category.TECH]: 'technology',
+    [Category.SOFTWARE]: 'programming OR software development',
+    [Category.AI_ML]: 'artificial intelligence OR machine learning',
+    [Category.BUSINESS]: 'business',
+    [Category.SPORTS]: 'sports',
+    [Category.SCIENCE]: 'science',
+    [Category.INDIA]: 'India',
+    [Category.WORLD]: 'world',
+    [Category.BREAKING]: 'breaking news',
+  };
 
   static getInstance(): NewsApiService {
     if (!NewsApiService.instance) {
@@ -39,167 +48,145 @@ class NewsApiService {
     return NewsApiService.instance;
   }
 
-  private transformArticle(newsApiArticle: NewsAPIArticle, category: Category): Article {
-    // Create more unique ID using URL hash or title hash
-    const urlHash = newsApiArticle.url ? newsApiArticle.url.split('/').pop() || '' : '';
-    const titleHash = newsApiArticle.title ? newsApiArticle.title.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) : '';
-    const uniqueId = `newsapi_${urlHash}_${titleHash}_${Math.random().toString(36).substr(2, 5)}`;
-    
+  private mapArticle(item: NewsAPIResponse['articles'][0], category: Category): Article {
     return {
-      id: uniqueId,
-      title: newsApiArticle.title,
-      description: newsApiArticle.description || '',
-      content: newsApiArticle.content || undefined,
-      url: newsApiArticle.url,
-      urlToImage: newsApiArticle.urlToImage || undefined,
-      author: newsApiArticle.author || undefined,
-      source: newsApiArticle.source.name,
-      publishedAt: newsApiArticle.publishedAt,
+      id: `${item.url}-${Date.now()}`,
+      title: item.title || 'Untitled',
+      description: item.description || 'No description available',
+      content: item.content || undefined,
+      url: item.url,
+      urlToImage: item.urlToImage || undefined,
+      author: item.author || undefined,
+      source: item.source.name,
+      publishedAt: item.publishedAt,
       category,
-      tags: [newsApiArticle.source.name],
+      readTime: Math.ceil((item.content?.length || 0) / 200),
     };
   }
 
-  private getCategoryQuery(category: Category): string {
-    // More specific and focused queries to get better quality results
-    switch (category) {
-      case Category.SOFTWARE:
-        return '("software development" OR "programming" OR "JavaScript" OR "Python" OR "React" OR "AI" OR "machine learning") NOT (advertisement OR sponsored)';
-      case Category.BREAKING:
-        return '"breaking news" OR "just in" OR "latest update" NOT (click OR subscribe)';
-      case Category.POLITICAL:
-        return '("politics" OR "government" OR "election" OR "policy" OR "parliament") NOT (opinion OR editorial)';
-      case Category.INDIA:
-        return '("India" OR "Indian government" OR "Delhi" OR "Mumbai" OR "Bangalore") NOT (advertisement OR sponsored)';
-      case Category.SPORTS:
-        return '("sports" OR "football match" OR "cricket" OR "tennis" OR "basketball game") NOT (betting OR gambling)';
-      case Category.BUSINESS:
-        return '("business news" OR "stock market" OR "economy" OR "finance" OR "startup") NOT (advertisement OR sponsored)';
-      case Category.WORLD:
-        return '("world news" OR "international" OR "United Nations" OR "global") NOT (opinion OR sponsored)';
-      case Category.TECH:
-        return '("technology" OR "tech news" OR "gadget" OR "smartphone" OR "innovation") NOT (advertisement OR review)';
-      case Category.AI_ML:
-        return '("artificial intelligence" OR "machine learning" OR "deep learning" OR "ChatGPT" OR "neural network") NOT (course OR tutorial)';
-      default:
-        return '"news" NOT (advertisement OR sponsored OR click)';
-    }
+  private getApiKey(): string {
+    return this.apiKeys[this.currentKeyIndex];
   }
 
-  async fetchArticles(options: FetchArticlesOptions): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `newsapi_${options.category}_${options.page || 1}`;
-    
-    return this.errorHandler.executeWithRetry(
-      async () => {
-        const query = options.searchQuery || this.getCategoryQuery(options.category);
-        const page = options.page || 1;
-        const pageSize = Math.min(options.limit || 20, 100);
-        
-        const params = new URLSearchParams({
-          'apiKey': this.apiKey,
-          'q': query,
-          'page': page.toString(),
-          'pageSize': pageSize.toString(),
-          'sortBy': options.sortBy === 'popularity' ? 'popularity' : 'publishedAt',
-          'language': 'en'
+  async getArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
+    const cacheKey = `${category}-${limit}`;
+    const cached = this.CACHE.get(cacheKey);
+
+    // Return cached data if valid
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      console.log(`✅ Returning cached articles for ${category}`);
+      return {
+        data: cached.data,
+        source: `NewsAPI.org (Cached)`,
+        timestamp: cached.timestamp,
+        hasMore: cached.data.length >= limit,
+        totalResults: cached.data.length,
+      };
+    }
+
+    const query = this.categoryQueries[category] || category;
+
+    try {
+      console.log(`🔄 Fetching ${category} articles from NewsAPI.org...`);
+      const apiKey = this.getApiKey();
+      console.log(`📌 Using API key index ${this.currentKeyIndex}`);
+
+      // Build URL with proper encoding
+      const params = new URLSearchParams();
+      params.append('q', query);
+      params.append('sortBy', 'publishedAt');
+      params.append('language', 'en');
+      params.append('pageSize', Math.min(limit, 100).toString());
+      params.append('apiKey', apiKey);
+
+      const url = `${this.BASE_URL}/everything?${params.toString()}`;
+      console.log(`🔗 URL: ${url.replace(apiKey, '***')}`);
+
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          signal: controller.signal,
         });
 
-        const url = `${this.baseUrl}/everything?${params}`;
-        const response = await fetch(url);
-        
+        clearTimeout(timeoutId);
+        console.log(`📊 Response status: ${response.status}`);
+
         if (!response.ok) {
-          throw new Error(`NewsAPI error: ${response.status} ${response.statusText}`);
+          const errorText = await response.text();
+          console.error(`❌ NewsAPI error ${response.status}: ${errorText}`);
+          
+          // Try next API key on 401 (unauthorized)
+          if (response.status === 401 && this.currentKeyIndex < this.apiKeys.length - 1) {
+            console.log(`🔄 Trying next API key...`);
+            this.currentKeyIndex++;
+            return this.getArticles(category, limit);
+          }
+          
+          return {
+            data: [],
+            source: `NewsAPI.org (Error: ${response.status})`,
+            timestamp: Date.now(),
+            hasMore: false,
+            totalResults: 0,
+          };
         }
 
         const data: NewsAPIResponse = await response.json();
-        
+        console.log(`📦 Got response: status=${data.status}, articles=${data.articles?.length || 0}`);
+
         if (data.status !== 'ok') {
-          throw new Error('NewsAPI returned error status');
+          console.error(`❌ NewsAPI error: ${data.status} - ${(data as any).message}`);
+          return {
+            data: [],
+            source: `NewsAPI.org (API Error: ${data.status})`,
+            timestamp: Date.now(),
+            hasMore: false,
+            totalResults: 0,
+          };
         }
 
-        // Initial filter for basic validity
-        const validArticles = data.articles.filter(article => 
-          article.title && 
-          article.description && 
-          article.title !== '[Removed]' &&
-          !article.title.toLowerCase().includes('removed') &&
-          article.url &&
-          !article.url.includes('removed.com')
-        );
+        const articles = data.articles
+          .slice(0, limit)
+          .map((item) => this.mapArticle(item, category));
 
-        // Transform articles
-        let articles = validArticles.map(article => 
-          this.transformArticle(article, options.category)
-        );
-        
-        // Apply quality filter to remove trash content
-        articles = ArticleQualityFilter.filterArticles(articles);
-        
-        // Filter by quality score (minimum 50/100)
-        articles = ArticleQualityFilter.filterByQualityScore(articles, 50);
+        // Cache the results
+        this.CACHE.set(cacheKey, { data: articles, timestamp: Date.now() });
 
-        const hasMore = articles.length === pageSize && data.totalResults > (page * pageSize);
+        console.log(`✅ Fetched ${articles.length} articles for ${category} from NewsAPI.org`);
 
         return {
           data: articles,
           source: 'NewsAPI.org',
           timestamp: Date.now(),
-          hasMore,
+          hasMore: data.articles.length > limit,
           totalResults: data.totalResults,
         };
-      },
-      cacheKey,
-      'newsapi'
-    );
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      console.error(`❌ Exception fetching from NewsAPI.org:`, error);
+      return {
+        data: [],
+        source: `NewsAPI.org (Exception)`,
+        timestamp: Date.now(),
+        hasMore: false,
+        totalResults: 0,
+      };
+    }
   }
 
-  // Specialized method for breaking news using top headlines
-  async fetchBreakingNews(limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `newsapi_breaking_headlines_${limit}`;
-    
-    return this.errorHandler.executeWithRetry(
-      async () => {
-        const params = new URLSearchParams({
-          'apiKey': this.apiKey,
-          'pageSize': Math.min(limit, 100).toString(),
-          'country': 'us', // Can be changed to 'in' for India
-          'category': 'general'
-        });
-
-        const url = `${this.baseUrl}/top-headlines?${params}`;
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-          throw new Error(`NewsAPI Headlines error: ${response.status} ${response.statusText}`);
-        }
-
-        const data: NewsAPIResponse = await response.json();
-        
-        if (data.status !== 'ok') {
-          throw new Error('NewsAPI Headlines returned error status');
-        }
-
-        const validArticles = data.articles.filter(article => 
-          article.title && 
-          article.description && 
-          article.title !== '[Removed]'
-        );
-
-        const articles = validArticles.map(article => 
-          this.transformArticle(article, Category.BREAKING)
-        );
-
-        return {
-          data: articles,
-          source: 'NewsAPI.org Breaking',
-          timestamp: Date.now(),
-          hasMore: false,
-          totalResults: articles.length,
-        };
-      },
-      cacheKey,
-      'newsapi-breaking'
-    );
+  clearCache(): void {
+    this.CACHE.clear();
+    console.log('🗑️ NewsAPI cache cleared');
   }
 }
 

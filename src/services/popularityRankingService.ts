@@ -104,7 +104,7 @@ class PopularityRankingService {
   }
 
   private calculateSourceCredibilityScore(source: string): number {
-    return this.sourceCredibility[source] || this.sourceCredibility['default'];
+    return this.sourceCredibility[source] || this.sourceCredibility.default;
   }
 
   private calculateTrendingScore(article: Article, category: Category): number {
@@ -173,13 +173,16 @@ class PopularityRankingService {
     };
   }
 
-  public rankArticlesByPopularity(articles: Article[], category: Category): EnhancedArticle[] {
+  public rankArticlesByPopularity(articles: Article[], category: Category): Article[] {
     const enhancedArticles = articles.map(article => 
       this.enhanceArticleWithPopularity(article, category)
     );
     
     // Sort by overall popularity score (descending)
-    return enhancedArticles.sort((a, b) => b.popularityMetrics.overallScore - a.popularityMetrics.overallScore);
+    const sorted = enhancedArticles.sort((a, b) => b.popularityMetrics.overallScore - a.popularityMetrics.overallScore);
+    
+    // Return as regular Article[] (popularityMetrics are added dynamically)
+    return sorted as Article[];
   }
 
   // Get trending topics for a category

@@ -1,45 +1,36 @@
-import { Article, Category, ServiceResponse, FetchArticlesOptions } from '../types/Article';
-import ErrorHandler from './errorHandler';
+import { Article, Category, ServiceResponse } from '../types/Article';
+import API_CONFIG from '../config/apiConfig';
 
 interface GuardianArticle {
   id: string;
+  type: string;
+  sectionId: string;
+  sectionName: string;
+  webPublicationDate: string;
   webTitle: string;
   webUrl: string;
   apiUrl: string;
-  webPublicationDate: string;
   fields?: {
-    headline?: string;
-    standfirst?: string;
-    body?: string;
     thumbnail?: string;
     byline?: string;
     trailText?: string;
   };
-  sectionName: string;
 }
 
 interface GuardianResponse {
   response: {
     status: string;
-    userTier: string;
     total: number;
-    startIndex: number;
-    pageSize: number;
-    currentPage: number;
-    pages: number;
-    orderBy: string;
     results: GuardianArticle[];
   };
 }
 
 class GuardianService {
   private static instance: GuardianService;
-  private errorHandler: ErrorHandler;
-  private baseUrl = 'https://content.guardianapis.com';
-
-  private constructor() {
-    this.errorHandler = ErrorHandler.getInstance();
-  }
+  private readonly BASE_URL = 'https://open.guardian.com/search';
+  private readonly API_KEY = API_CONFIG.GUARDIAN_API_KEY; // Get from config
+  private readonly CACHE: Map<string, { data: Article[]; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
   static getInstance(): GuardianService {
     if (!GuardianService.instance) {
@@ -48,93 +39,141 @@ class GuardianService {
     return GuardianService.instance;
   }
 
-  private transformArticle(guardianArticle: GuardianArticle, category: Category): Article {
+  private mapGuardianArticle(item: GuardianArticle, category: Category): Article {
     return {
-      id: `guardian_${guardianArticle.id}_${Date.now()}`,
-      title: guardianArticle.webTitle,
-      description: guardianArticle.fields?.standfirst || guardianArticle.fields?.trailText || '',
-      content: guardianArticle.fields?.body,
-      url: guardianArticle.webUrl,
-      urlToImage: guardianArticle.fields?.thumbnail,
-      author: guardianArticle.fields?.byline,
+      id: `guardian-${item.id}`,
+      title: item.webTitle,
+      description: item.fields?.trailText || 'No description available',
+      url: item.webUrl,
+      urlToImage: item.fields?.thumbnail || undefined,
+      author: item.fields?.byline || undefined,
       source: 'The Guardian',
-      publishedAt: guardianArticle.webPublicationDate,
+      publishedAt: item.webPublicationDate,
       category,
-      tags: [guardianArticle.sectionName],
+      readTime: Math.ceil((item.fields?.trailText?.length || 0) / 200),
     };
   }
 
-  private getSectionForCategory(category: Category): string {
-    switch (category) {
-      case Category.POLITICAL:
-        return 'politics';
-      case Category.WORLD:
-        return 'world';
-      case Category.BUSINESS:
-        return 'business';
-      case Category.SPORTS:
-        return 'sport';
-      case Category.SCIENCE:
-        return 'science';
-      case Category.TECH:
-        return 'technology';
-      case Category.INDIA:
-        return 'world/india';
-      default:
-        return 'world';
-    }
+  private getGuardianSection(category: Category): string {
+    // Map categories to Guardian sections
+    const sectionMap: { [key in Category]?: string } = {
+      [Category.TECH]: 'technology',
+      [Category.BUSINESS]: 'business',
+      [Category.WORLD]: 'world',
+      [Category.SCIENCE]: 'science',
+      [Category.SPORTS]: 'sport',
+      [Category.BREAKING]: 'news',
+    };
+    return sectionMap[category] || 'news';
   }
 
-  async fetchArticles(options: FetchArticlesOptions): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `guardian_${options.category}_${options.page || 1}`;
-    
-    return this.errorHandler.executeWithRetry(
-      async () => {
-        const section = this.getSectionForCategory(options.category);
-        const page = options.page || 1;
-        const pageSize = Math.min(options.limit || 20, 50);
-        
-        // Using a test Guardian API key (this may not work in production)
-        const apiKey = 'test'; // Guardian API key - replace with valid key
-        const params = new URLSearchParams({
-          'api-key': apiKey,
-          'section': section,
-          'page': page.toString(),
-          'page-size': pageSize.toString(),
-          'show-fields': 'headline,standfirst,body,thumbnail,byline,trailText',
-          'order-by': 'newest'
+  async getArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
+    const cacheKey = `guardian-${category}-${limit}`;
+    const cached = this.CACHE.get(cacheKey);
+
+    // Return cached data if valid
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      console.log(`✅ Returning cached Guardian articles for ${category}`);
+      return {
+        data: cached.data,
+        source: `The Guardian (Cached)`,
+        timestamp: cached.timestamp,
+        hasMore: cached.data.length >= limit,
+        totalResults: cached.data.length,
+      };
+    }
+
+    try {
+      console.log(`🔄 Fetching ${category} articles from The Guardian...`);
+      const section = this.getGuardianSection(category);
+
+      const params = new URLSearchParams();
+      params.append('section', section);
+      params.append('page-size', Math.min(limit, 50).toString());
+      params.append('order-by', 'newest');
+      params.append('show-fields', 'thumbnail,byline,trailText');
+      params.append('api-key', this.API_KEY);
+
+      const url = `${this.BASE_URL}?${params.toString()}`;
+      console.log(`🔗 URL: ${url.replace(this.API_KEY, '***')}`);
+
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          signal: controller.signal,
         });
 
-        const url = `${this.baseUrl}/search?${params}`;
-        const response = await fetch(url);
-        
+        clearTimeout(timeoutId);
+        console.log(`📊 Response status: ${response.status}`);
+
         if (!response.ok) {
-          throw new Error(`Guardian API error: ${response.status} ${response.statusText}`);
+          const errorText = await response.text();
+          console.error(`❌ Guardian error ${response.status}: ${errorText}`);
+          return {
+            data: [],
+            source: `The Guardian (Error: ${response.status})`,
+            timestamp: Date.now(),
+            hasMore: false,
+            totalResults: 0,
+          };
         }
 
         const data: GuardianResponse = await response.json();
-        
+        console.log(`📦 Got response: articles=${data.response.results?.length || 0}`);
+
         if (data.response.status !== 'ok') {
-          throw new Error('Guardian API returned error status');
+          console.error(`❌ Guardian API error: ${data.response.status}`);
+          return {
+            data: [],
+            source: `The Guardian (API Error)`,
+            timestamp: Date.now(),
+            hasMore: false,
+            totalResults: 0,
+          };
         }
 
-        const articles = data.response.results.map(article => 
-          this.transformArticle(article, options.category)
-        );
+        const articles = (data.response.results || [])
+          .slice(0, limit)
+          .map((item) => this.mapGuardianArticle(item, category));
 
-        const hasMore = data.response.currentPage < data.response.pages;
+        // Cache the results
+        this.CACHE.set(cacheKey, { data: articles, timestamp: Date.now() });
+
+        console.log(`✅ Fetched ${articles.length} articles for ${category} from The Guardian`);
 
         return {
           data: articles,
-          source: 'The Guardian API',
+          source: 'The Guardian',
           timestamp: Date.now(),
-          hasMore,
+          hasMore: (data.response.results || []).length > limit,
           totalResults: data.response.total,
         };
-      },
-      cacheKey,
-      'guardian'
-    );
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      console.error(`❌ Exception fetching from The Guardian:`, error);
+      return {
+        data: [],
+        source: `The Guardian (Exception)`,
+        timestamp: Date.now(),
+        hasMore: false,
+        totalResults: 0,
+      };
+    }
+  }
+
+  clearCache(): void {
+    this.CACHE.clear();
+    console.log('🗑️ Guardian cache cleared');
   }
 }
 

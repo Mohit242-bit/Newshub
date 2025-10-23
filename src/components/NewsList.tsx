@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -36,16 +36,48 @@ const NewsList: React.FC<NewsListProps> = ({
   emptyMessage = 'No articles available',
   source,
 }) => {
+  const [openingArticleId, setOpeningArticleId] = useState<string | null>(null);
   const handleArticlePress = useCallback(async (article: Article) => {
     try {
-      const supported = await Linking.canOpenURL(article.url);
+      setOpeningArticleId(article.id);
+      console.log(`📖 Opening article: ${article.title}`);
+      console.log(`🔗 URL: ${article.url}`);
+      
+      // Validate URL
+      if (!article.url) {
+        setOpeningArticleId(null);
+        Alert.alert('Error', 'Article URL not available');
+        console.warn('❌ Article URL is empty or undefined');
+        return;
+      }
+      
+      // Ensure URL starts with http:// or https://
+      let url = article.url;
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+        console.log(`✅ Prepended https:// to URL: ${url}`);
+      }
+      
+      // Check if URL can be opened
+      const supported = await Linking.canOpenURL(url);
+      console.log(`🔍 URL supported: ${supported}`);
+      
       if (supported) {
-        await Linking.openURL(article.url);
+        console.log(`✅ Opening URL in browser: ${url}`);
+        await Linking.openURL(url);
+        console.log(`✅ Successfully opened URL`);
       } else {
-        Alert.alert('Error', 'Cannot open this link');
+        console.error(`❌ URL not supported: ${url}`);
+        Alert.alert('Error', `Cannot open this link:\n${url}\n\nPlease check your browser settings.`);
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to open link');
+      console.error('❌ Error opening article URL:', error);
+      Alert.alert(
+        'Error',
+        'Failed to open link. Please try again or check your internet connection.'
+      );
+    } finally {
+      setOpeningArticleId(null);
     }
   }, []);
 
@@ -71,13 +103,22 @@ const NewsList: React.FC<NewsListProps> = ({
     const isPopular = (article as any).popularityMetrics?.overallScore > 0.7;
     const isTrending = (article as any).popularityMetrics?.trendingScore > 0.3;
     const isRecent = (article as any).popularityMetrics?.recencyScore > 0.8;
+    const isOpening = openingArticleId === article.id;
     
     return (
     <TouchableOpacity
-      style={styles.articleContainer}
+      style={[styles.articleContainer, isOpening && styles.articleContainerActive]}
       onPress={() => handleArticlePress(article)}
       activeOpacity={0.7}
+      disabled={isOpening}
     >
+      {isOpening && (
+        <View style={styles.openingOverlay}>
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={styles.openingText}>Opening article...</Text>
+        </View>
+      )}
+      
       <View style={styles.articleContent}>
         <View style={styles.articleHeader}>
           <View style={styles.sourceContainer}>
@@ -130,7 +171,7 @@ const NewsList: React.FC<NewsListProps> = ({
       )}
     </TouchableOpacity>
     );
-  }, [handleArticlePress, formatTimeAgo]);
+  }, [handleArticlePress, formatTimeAgo, openingArticleId]);
 
   const renderFooter = () => {
     if (!loadingMore) return null;
@@ -362,6 +403,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: 20,
+  },
+  articleContainerActive: {
+    opacity: 0.7,
+  },
+  openingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  openingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '600',
   },
 });
 

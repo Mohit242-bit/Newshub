@@ -1,202 +1,153 @@
 import { Article, Category, ServiceResponse } from '../types/Article';
-import ErrorHandler from './errorHandler';
-import { ArticleQualityFilter } from '../utils/articleQualityFilter';
 
-export interface DevToArticle {
+interface DevToArticle {
   id: number;
   title: string;
   description: string;
   url: string;
-  cover_image?: string;
-  social_image?: string;
-  user: {
-    name: string;
-    username: string;
-  };
+  cover_image: string | null;
+  user: { name: string; username: string };
   published_at: string;
-  tag_list: string[];
   reading_time_minutes: number;
-  body_markdown?: string;
+  tag_list: string[];
 }
 
 class DevToService {
   private static instance: DevToService;
-  private baseUrl = 'https://dev.to/api';
-  private errorHandler = ErrorHandler.getInstance();
+  private readonly BASE_URL = 'https://dev.to/api/articles';
+  private readonly CACHE: Map<string, { data: Article[]; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
-  public static getInstance(): DevToService {
+  static getInstance(): DevToService {
     if (!DevToService.instance) {
       DevToService.instance = new DevToService();
     }
     return DevToService.instance;
   }
 
-  async fetchArticles(limit: number = 20, page: number = 1): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `devto_articles_${limit}_${page}`;
-    
-    const primaryCall = async (): Promise<ServiceResponse<Article[]>> => {
-      const params = new URLSearchParams({
-        per_page: limit.toString(),
-        page: page.toString(),
-        state: 'fresh'
-      });
-
-      const response = await fetch(`${this.baseUrl}/articles?${params}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'NewsHub-App/1.0'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Dev.to API error: ${response.status} ${response.statusText}`);
-      }
-
-      const data: DevToArticle[] = await response.json();
-      let articles = this.transformArticles(data);
-      
-      // Apply quality filter to Dev.to articles
-      articles = ArticleQualityFilter.filterArticles(articles);
-      
-      return {
-        data: articles,
-        source: 'Dev.to',
-        timestamp: Date.now(),
-        hasMore: data.length === limit,
-        totalResults: data.length
-      };
+  private mapDevToArticle(item: DevToArticle, category: Category): Article {
+    return {
+      id: `devto-${item.id}`,
+      title: item.title,
+      description: item.description,
+      content: undefined,
+      url: item.url,
+      urlToImage: item.cover_image || undefined,
+      author: item.user.name || item.user.username,
+      source: 'Dev.to',
+      publishedAt: item.published_at,
+      category,
+      readTime: item.reading_time_minutes,
+      tags: item.tag_list,
     };
-
-    // Fallback to trending articles if fresh fails
-    const fallbackCall = async (): Promise<ServiceResponse<Article[]>> => {
-      const response = await fetch(`${this.baseUrl}/articles?per_page=${limit}&page=${page}&top=7`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'NewsHub-App/1.0'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Dev.to trending API error: ${response.status}`);
-      }
-
-      const data: DevToArticle[] = await response.json();
-      const articles = this.transformArticles(data);
-      
-      return {
-        data: articles,
-        source: 'Dev.to (Trending)',
-        timestamp: Date.now(),
-        hasMore: data.length === limit,
-        totalResults: data.length
-      };
-    };
-
-    return this.errorHandler.executeWithFallback(
-      primaryCall,
-      [fallbackCall],
-      cacheKey,
-      'Dev.to'
-    );
   }
 
-  async searchArticles(query: string, limit: number = 20): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `devto_search_${query}_${limit}`;
-    
-    const searchCall = async (): Promise<ServiceResponse<Article[]>> => {
-      const params = new URLSearchParams({
-        per_page: limit.toString(),
-        state: 'fresh'
-      });
+  private getDevToTags(category: Category): string {
+    // Map categories to dev.to tags
+    const tagMap: { [key in Category]?: string } = {
+      [Category.SOFTWARE]: 'programming',
+      [Category.WEB_DEV]: 'webdev',
+      [Category.MOBILE_DEV]: 'mobile',
+      [Category.TECH]: 'tech',
+      [Category.AI_ML]: 'ai',
+    };
+    return tagMap[category] || 'programming';
+  }
 
-      // Dev.to doesn't have direct search, so we filter by tags if query matches common tech terms
-      const techTags = ['javascript', 'python', 'react', 'nodejs', 'typescript', 'ai', 'machine learning'];
-      const matchingTag = techTags.find(tag => query.toLowerCase().includes(tag));
-      
-      if (matchingTag) {
-        params.append('tag', matchingTag);
-      }
+  async getArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
+    const cacheKey = `devto-${category}-${limit}`;
+    const cached = this.CACHE.get(cacheKey);
 
-      const response = await fetch(`${this.baseUrl}/articles?${params}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'NewsHub-App/1.0'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Dev.to search error: ${response.status}`);
-      }
-
-      const data: DevToArticle[] = await response.json();
-      let articles = this.transformArticles(data);
-      
-      // Client-side filtering for better search results
-      if (!matchingTag) {
-        articles = articles.filter(article => 
-          article.title.toLowerCase().includes(query.toLowerCase()) ||
-          article.description.toLowerCase().includes(query.toLowerCase()) ||
-          article.tags?.some(tag => tag.toLowerCase().includes(query.toLowerCase()))
-        );
-      }
-      
+    // Return cached data if valid
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      console.log(`✅ Returning cached Dev.to articles for ${category}`);
       return {
-        data: articles,
-        source: 'Dev.to Search',
+        data: cached.data,
+        source: `Dev.to (Cached)`,
+        timestamp: cached.timestamp,
+        hasMore: cached.data.length >= limit,
+        totalResults: cached.data.length,
+      };
+    }
+
+    try {
+      console.log(`🔄 Fetching ${category} articles from Dev.to...`);
+      const tag = this.getDevToTags(category);
+
+      const params = new URLSearchParams();
+      params.append('tag', tag);
+      params.append('per_page', Math.min(limit, 30).toString());
+      params.append('state', 'fresh');
+
+      const url = `${this.BASE_URL}?${params.toString()}`;
+      console.log(`🔗 URL: ${url}`);
+
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+        console.log(`📊 Response status: ${response.status}`);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`❌ Dev.to error ${response.status}: ${errorText}`);
+          return {
+            data: [],
+            source: `Dev.to (Error: ${response.status})`,
+            timestamp: Date.now(),
+            hasMore: false,
+            totalResults: 0,
+          };
+        }
+
+        const data: DevToArticle[] = await response.json();
+        console.log(`📦 Got response: articles=${data?.length || 0}`);
+
+        const articles = (data || [])
+          .slice(0, limit)
+          .map((item) => this.mapDevToArticle(item, category));
+
+        // Cache the results
+        this.CACHE.set(cacheKey, { data: articles, timestamp: Date.now() });
+
+        console.log(`✅ Fetched ${articles.length} articles for ${category} from Dev.to`);
+
+        return {
+          data: articles,
+          source: 'Dev.to',
+          timestamp: Date.now(),
+          hasMore: (data || []).length > limit,
+          totalResults: data?.length || 0,
+        };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      console.error(`❌ Exception fetching from Dev.to:`, error);
+      return {
+        data: [],
+        source: `Dev.to (Exception)`,
         timestamp: Date.now(),
         hasMore: false,
-        totalResults: articles.length
+        totalResults: 0,
       };
-    };
-
-    return this.errorHandler.executeWithFallback(
-      searchCall,
-      [],
-      cacheKey,
-      'Dev.to Search'
-    );
-  }
-
-  private transformArticles(devToArticles: DevToArticle[]): Article[] {
-    return devToArticles.map(article => ({
-      id: `devto_${article.id}_${Date.now()}`,
-      title: article.title,
-      description: article.description || '',
-      content: article.body_markdown,
-      url: article.url,
-      urlToImage: article.cover_image || article.social_image,
-      author: article.user.name,
-      source: 'Dev.to',
-      publishedAt: article.published_at,
-      category: Category.SOFTWARE,
-      readTime: article.reading_time_minutes,
-      tags: article.tag_list
-    }));
-  }
-
-  async getArticleDetails(articleId: string): Promise<DevToArticle | null> {
-    try {
-      const numericId = articleId.replace('devto_', '');
-      const response = await fetch(`${this.baseUrl}/articles/${numericId}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'NewsHub-App/1.0'
-        }
-      });
-
-      if (!response.ok) {
-        return null;
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.warn('Failed to fetch Dev.to article details:', error);
-      return null;
     }
+  }
+
+  clearCache(): void {
+    this.CACHE.clear();
+    console.log('🗑️ Dev.to cache cleared');
   }
 }
 

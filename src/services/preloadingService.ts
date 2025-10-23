@@ -8,8 +8,8 @@ import PopularityRankingService from './popularityRankingService';
  */
 class PreloadingService {
   private static instance: PreloadingService;
-  private networkService = NetworkService.getInstance();
-  private popularityService = PopularityRankingService.getInstance();
+  private networkService: any = null;
+  private popularityService: any = null;
   
   // Cache for pre-loaded articles
   private preloadedCache: Map<Category, {
@@ -40,22 +40,52 @@ class PreloadingService {
     return PreloadingService.instance;
   }
 
+  private getNetworkService(): any {
+    if (!this.networkService) {
+      try {
+        this.networkService = NetworkService.getInstance();
+      } catch (err) {
+        console.error('❌ Failed to initialize NetworkService:', err);
+        throw err;
+      }
+    }
+    return this.networkService;
+  }
+
+  private getPopularityService(): any {
+    if (!this.popularityService) {
+      try {
+        this.popularityService = PopularityRankingService.getInstance();
+      } catch (err) {
+        console.error('❌ Failed to initialize PopularityRankingService:', err);
+        throw err;
+      }
+    }
+    return this.popularityService;
+  }
+
   /**
    * Start pre-loading process in background
    */
   async startPreloading(): Promise<void> {
     console.log('🚀 Starting background pre-loading...');
     
-    // Load categories with progressive delays to avoid overwhelming APIs
-    for (let i = 0; i < this.PRELOAD_CATEGORIES.length; i++) {
-      const category = this.PRELOAD_CATEGORIES[i];
-      
-      // Progressive delay: 0ms, 2s, 4s, 6s, etc.
-      const delay = i * 2000;
-      
-      setTimeout(() => {
-        this.preloadCategory(category);
-      }, delay);
+    try {
+      // Load categories with progressive delays to avoid overwhelming APIs
+      for (let i = 0; i < this.PRELOAD_CATEGORIES.length; i++) {
+        const category = this.PRELOAD_CATEGORIES[i];
+        
+        // Progressive delay: 0ms, 2s, 4s, 6s, etc.
+        const delay = i * 2000;
+        
+        setTimeout(() => {
+          this.preloadCategory(category).catch(err => {
+            console.warn(`⚠️ Background pre-loading error for ${category}:`, err);
+          });
+        }, delay);
+      }
+    } catch (error) {
+      console.error('❌ Error starting pre-loading:', error);
     }
   }
 
@@ -66,14 +96,16 @@ class PreloadingService {
     try {
       console.log(`📱 Pre-loading ${category}...`);
       
-      const response = await this.networkService.getArticles(category, 25);
+      const networkService = this.getNetworkService();
+      const response = await networkService.getArticles(category, 25);
       
       if (response.data.length > 0) {
         // Rank articles by popularity before caching
-        const rankedArticles = this.popularityService.rankArticlesByPopularity(response.data, category);
+        const popularityService = this.getPopularityService();
+        const rankedArticles = popularityService.rankArticlesByPopularity(response.data, category);
         
         this.preloadedCache.set(category, {
-          articles: rankedArticles, // Store enhanced articles with popularity metrics
+          articles: rankedArticles,
           timestamp: Date.now(),
           source: response.source,
         });
@@ -120,11 +152,8 @@ class PreloadingService {
           source: response.source,
         });
         
-        // Return ranked articles
-        return {
-          ...response,
-          data: rankedArticles
-        };
+        // Return articles directly
+        return response;
       }
       
       return response;

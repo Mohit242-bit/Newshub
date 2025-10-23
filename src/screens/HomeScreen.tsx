@@ -125,32 +125,66 @@ const HomeScreen: React.FC = () => {
 
   // Initialize pre-loading on app start
   useEffect(() => {
+    let isMounted = true;
     const initializeApp = async () => {
-      console.log('🎆 Initializing NewsHub app...');
-      console.log('📂 Selected category:', selectedCategory);
-      
       try {
-        // Load current category immediately
+        console.log('🎆 Initializing NewsHub app...');
+        console.log('📂 Selected category:', selectedCategory);
+        
+        if (!isMounted) return;
+        
+        // Load current category immediately with timeout
         console.log('🚀 Loading initial articles...');
-        await fetchArticles(selectedCategory);
+        const loadPromise = fetchArticles(selectedCategory);
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Article loading timeout')), 10000);
+        });
+        
+        try {
+          await Promise.race([loadPromise, timeoutPromise]);
+        } catch (timeoutErr) {
+          console.warn('⚠️ Initial article loading timed out, continuing anyway:', timeoutErr);
+        }
+        
+        if (!isMounted) return;
+        
         console.log('✅ Initial articles loaded');
         
         // Check network status and update UI
-        const isNetworkAvailable = networkService.getNetworkStatus();
-        setNetworkStatus(isNetworkAvailable);
-        console.log(`🌐 Network status: ${isNetworkAvailable ? 'Available' : 'Unavailable'}`);
+        try {
+          const isNetworkAvailable = networkService.getNetworkStatus();
+          if (isMounted) {
+            setNetworkStatus(isNetworkAvailable);
+          }
+          console.log(`🌐 Network status: ${isNetworkAvailable ? 'Available' : 'Unavailable'}`);
+        } catch (networkErr) {
+          console.warn('⚠️ Failed to check network status:', networkErr);
+        }
         
+        if (!isMounted) return;
         
         // Start background pre-loading of other categories
         console.log('🔄 Starting background pre-loading...');
-        preloadingService.startPreloading();
-        console.log('✅ Background pre-loading started');
+        try {
+          preloadingService.startPreloading();
+          console.log('✅ Background pre-loading started');
+        } catch (preloadErr) {
+          console.warn('⚠️ Background pre-loading failed to start:', preloadErr);
+        }
       } catch (initError) {
-        console.error('❌ App initialization failed:', initError);
+        if (isMounted) {
+          console.error('❌ App initialization failed:', initError);
+          setError(`Initialization error: ${initError instanceof Error ? initError.message : 'Unknown error'}`);
+          // Don't let errors prevent the app from showing - show empty state with retry
+        }
       }
     };
     
     initializeApp();
+    
+    return () => {
+      isMounted = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run on mount
 

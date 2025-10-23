@@ -1,43 +1,34 @@
-import { Article, Category, ServiceResponse, FetchArticlesOptions } from '../types/Article';
-import ErrorHandler from './errorHandler';
+import { Article, Category, ServiceResponse } from '../types/Article';
 
-interface RSSItem {
-  title: string;
-  link: string;
-  description: string;
-  pubDate: string;
-  guid?: string;
-  category?: string;
-  'content:encoded'?: string;
-  'media:thumbnail'?: {
-    url: string;
+interface ESPNArticle {
+  links: {
+    source: Array<{
+      href: string;
+    }>;
+    web: Array<{
+      href: string;
+    }>;
   };
+  headline: string;
+  description: string;
+  images?: Array<{
+    full?: {
+      href: string;
+    };
+  }>;
+  published: string;
+  byline?: string;
 }
 
-interface RSSFeed {
-  rss: {
-    channel: {
-      title: string;
-      description: string;
-      item: RSSItem[];
-    };
-  };
+interface ESPNResponse {
+  articles?: ESPNArticle[];
 }
 
 class ESPNService {
   private static instance: ESPNService;
-  private errorHandler: ErrorHandler;
-  private rssFeeds = {
-    general: 'https://www.espn.com/espn/rss/news',
-    nfl: 'https://www.espn.com/espn/rss/nfl/news',
-    nba: 'https://www.espn.com/espn/rss/nba/news',
-    soccer: 'https://www.espn.com/espn/rss/soccer/news',
-    cricket: 'https://www.espn.com/espn/rss/cricket/news',
-  };
-
-  private constructor() {
-    this.errorHandler = ErrorHandler.getInstance();
-  }
+  private readonly BASE_URL = 'https://site.api.espn.com/v2/site/en/news';
+  private readonly CACHE: Map<string, { data: Article[]; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
   static getInstance(): ESPNService {
     if (!ESPNService.instance) {
@@ -46,138 +37,118 @@ class ESPNService {
     return ESPNService.instance;
   }
 
-  private async parseRSS(xmlText: string): Promise<RSSItem[]> {
-    // Simple RSS parsing - in production, consider using a proper XML parser
-    const items: RSSItem[] = [];
-    
-    try {
-      // Extract items using regex - simplified parsing
-      const itemMatches = xmlText.match(/<item[^>]*>[\s\S]*?<\/item>/g);
-      
-      if (itemMatches) {
-        for (const itemXml of itemMatches.slice(0, 20)) { // Limit to 20 items
-          const title = this.extractXmlContent(itemXml, 'title');
-          const link = this.extractXmlContent(itemXml, 'link');
-          const description = this.extractXmlContent(itemXml, 'description');
-          const pubDate = this.extractXmlContent(itemXml, 'pubDate');
-          const guid = this.extractXmlContent(itemXml, 'guid');
-          
-          if (title && link && description && pubDate) {
-            items.push({
-              title,
-              link,
-              description: this.cleanDescription(description),
-              pubDate,
-              guid: guid || link,
-            });
-          }
-        }
-      }
-    } catch (error) {
-      console.error('RSS parsing error:', error);
-    }
-    
-    return items;
-  }
+  private mapESPNArticle(item: ESPNArticle, category: Category): Article {
+    const sourceUrl = item.links?.source?.[0]?.href || item.links?.web?.[0]?.href || '';
+    const imageUrl = item.images?.[0]?.full?.href || undefined;
 
-  private extractXmlContent(xml: string, tag: string): string {
-    const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
-    return match ? match[1].trim().replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1') : '';
-  }
-
-  private cleanDescription(description: string): string {
-    // Remove HTML tags and decode entities
-    return description
-      .replace(/<[^>]*>/g, '')
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&')
-      .replace(/&#[0-9]+;/g, '')
-      .trim();
-  }
-
-  private parseDate(dateString: string): string {
-    try {
-      const date = new Date(dateString);
-      if (isNaN(date.getTime())) {
-        return new Date().toISOString();
-      }
-      return date.toISOString();
-    } catch (error) {
-      console.warn('ESPN date parsing error:', dateString);
-      return new Date().toISOString();
-    }
-  }
-
-  private transformArticle(rssItem: RSSItem): Article {
-    // Generate unique ID without Buffer (not available in React Native)
-    const uniqueId = `espn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
     return {
-      id: uniqueId,
-      title: rssItem.title,
-      description: rssItem.description || '',
-      content: rssItem['content:encoded'],
-      url: rssItem.link,
-      urlToImage: rssItem['media:thumbnail']?.url,
-      author: 'ESPN',
+      id: `espn-${item.headline.replace(/\s+/g, '-')}-${Date.now()}`,
+      title: item.headline,
+      description: item.description || 'No description available',
+      url: sourceUrl,
+      urlToImage: imageUrl,
+      author: item.byline || 'ESPN',
       source: 'ESPN',
-      publishedAt: this.parseDate(rssItem.pubDate),
-      category: Category.SPORTS,
-      tags: ['sports', rssItem.category].filter(Boolean) as string[],
+      publishedAt: item.published,
+      category,
+      readTime: Math.ceil((item.description?.length || 0) / 200),
     };
   }
 
-  private getFeedUrl(category: Category): string {
-    // For now, just return general sports feed
-    // Could be expanded to return specific feeds based on category
-    return this.rssFeeds.general;
-  }
+  async getArticles(category: Category, limit: number = 20): Promise<ServiceResponse<Article[]>> {
+    const cacheKey = `espn-${category}-${limit}`;
+    const cached = this.CACHE.get(cacheKey);
 
-  async fetchArticles(options: FetchArticlesOptions): Promise<ServiceResponse<Article[]>> {
-    const cacheKey = `espn_${options.category}_${options.page || 1}`;
-    
-    return this.errorHandler.executeWithRetry(
-      async () => {
-        const feedUrl = this.getFeedUrl(options.category);
-        
-        const response = await fetch(feedUrl, {
+    // Return cached data if valid
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      console.log(`✅ Returning cached ESPN articles for ${category}`);
+      return {
+        data: cached.data,
+        source: `ESPN (Cached)`,
+        timestamp: cached.timestamp,
+        hasMore: cached.data.length >= limit,
+        totalResults: cached.data.length,
+      };
+    }
+
+    try {
+      console.log(`🔄 Fetching ${category} articles from ESPN...`);
+
+      const url = this.BASE_URL;
+      console.log(`🔗 URL: ${url}`);
+
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
           headers: {
-            'User-Agent': 'NewsHub/1.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
           },
+          signal: controller.signal,
         });
-        
+
+        clearTimeout(timeoutId);
+        console.log(`📊 Response status: ${response.status}`);
+
         if (!response.ok) {
-          throw new Error(`ESPN RSS error: ${response.status} ${response.statusText}`);
+          const errorText = await response.text();
+          console.error(`❌ ESPN error ${response.status}: ${errorText}`);
+          return {
+            data: [],
+            source: `ESPN (Error: ${response.status})`,
+            timestamp: Date.now(),
+            hasMore: false,
+            totalResults: 0,
+          };
         }
 
-        const xmlText = await response.text();
-        const rssItems = await this.parseRSS(xmlText);
-        
-        // Apply pagination manually
-        const page = options.page || 1;
-        const limit = options.limit || 20;
-        const startIndex = (page - 1) * limit;
-        const endIndex = startIndex + limit;
-        
-        const paginatedItems = rssItems.slice(startIndex, endIndex);
-        const articles = paginatedItems.map(item => this.transformArticle(item));
-        
-        const hasMore = endIndex < rssItems.length;
+        const data: ESPNResponse = await response.json();
+        console.log(`📦 Got response: articles=${data.articles?.length || 0}`);
+
+        // Filter articles based on category (ESPN returns mixed sports)
+        let filteredArticles = data.articles || [];
+        if (category === Category.SPORTS) {
+          filteredArticles = filteredArticles;
+        }
+
+        const articles = filteredArticles
+          .slice(0, limit)
+          .map((item) => this.mapESPNArticle(item, category));
+
+        // Cache the results
+        this.CACHE.set(cacheKey, { data: articles, timestamp: Date.now() });
+
+        console.log(`✅ Fetched ${articles.length} articles for ${category} from ESPN`);
 
         return {
           data: articles,
-          source: 'ESPN RSS',
+          source: 'ESPN',
           timestamp: Date.now(),
-          hasMore,
-          totalResults: rssItems.length,
+          hasMore: filteredArticles.length > limit,
+          totalResults: filteredArticles.length,
         };
-      },
-      cacheKey,
-      'espn'
-    );
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      console.error(`❌ Exception fetching from ESPN:`, error);
+      return {
+        data: [],
+        source: `ESPN (Exception)`,
+        timestamp: Date.now(),
+        hasMore: false,
+        totalResults: 0,
+      };
+    }
+  }
+
+  clearCache(): void {
+    this.CACHE.clear();
+    console.log('🗑️ ESPN cache cleared');
   }
 }
 
