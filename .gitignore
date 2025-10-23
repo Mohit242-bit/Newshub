@@ -72,6 +72,10 @@ yarn-error.log
 .env.production
 .env.development
 
+# NewsHub config files
+src/config/*.env
+src/config/*.local
+
 # Generated APKs and builds
 *.apk
 *.zip

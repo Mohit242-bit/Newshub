@@ -90,6 +90,53 @@ class PreloadingService {
   }
 
   /**
+   * Remove duplicate articles based on title similarity
+   */
+  private removeDuplicates(articles: Article[]): Article[] {
+    if (articles.length === 0) return articles;
+    
+    const seen = new Map<string, Article>();
+    
+    for (const article of articles) {
+      const normalizedTitle = article.title.toLowerCase().trim();
+      let isDuplicate = false;
+      
+      for (const [existingTitle] of seen) {
+        if (this.isSimilarTitle(normalizedTitle, existingTitle)) {
+          isDuplicate = true;
+          break;
+        }
+      }
+      
+      if (!isDuplicate) {
+        seen.set(normalizedTitle, article);
+      }
+    }
+    
+    return Array.from(seen.values());
+  }
+
+  /**
+   * Check if two titles are similar (70% word match)
+   */
+  private isSimilarTitle(title1: string, title2: string): boolean {
+    const normalize = (t: string) => 
+      t.replace(/[^\w\s]/g, '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    
+    const words1 = new Set(normalize(title1));
+    const words2 = new Set(normalize(title2));
+    
+    if (words1.size === 0 && words2.size === 0) return true;
+    if (words1.size === 0 || words2.size === 0) return false;
+    
+    const intersection = new Set([...words1].filter(w => words2.has(w)));
+    const union = new Set([...words1, ...words2]);
+    
+    const similarity = union.size > 0 ? intersection.size / union.size : 0;
+    return similarity >= 0.7;
+  }
+
+  /**
    * Pre-load a specific category
    */
   private async preloadCategory(category: Category): Promise<void> {
@@ -100,9 +147,12 @@ class PreloadingService {
       const response = await networkService.getArticles(category, 25);
       
       if (response.data.length > 0) {
+        // Remove duplicates first
+        let articles = this.removeDuplicates(response.data);
+        
         // Rank articles by popularity before caching
         const popularityService = this.getPopularityService();
-        const rankedArticles = popularityService.rankArticlesByPopularity(response.data, category);
+        const rankedArticles = popularityService.rankArticlesByPopularity(articles, category);
         
         this.preloadedCache.set(category, {
           articles: rankedArticles,
@@ -110,7 +160,7 @@ class PreloadingService {
           source: response.source,
         });
         
-        console.log(`✅ Pre-loaded ${category}: ${response.data.length} articles`);
+        console.log(`✅ Pre-loaded ${category}: ${rankedArticles.length} unique articles`);
       }
     } catch (error) {
       console.warn(`❌ Failed to pre-load ${category}:`, error);
@@ -144,7 +194,10 @@ class PreloadingService {
       
       // Cache the fresh data with popularity ranking
       if (response.data.length > 0) {
-        const rankedArticles = this.popularityService.rankArticlesByPopularity(response.data, category);
+        // Remove duplicates first
+        let articles = this.removeDuplicates(response.data);
+        
+        const rankedArticles = this.popularityService.rankArticlesByPopularity(articles, category);
         
         this.preloadedCache.set(category, {
           articles: rankedArticles,
@@ -153,7 +206,10 @@ class PreloadingService {
         });
         
         // Return articles directly
-        return response;
+        return {
+          ...response,
+          data: articles
+        };
       }
       
       return response;
